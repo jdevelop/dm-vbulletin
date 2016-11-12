@@ -6,8 +6,10 @@ import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.util.ByteString
 import dm.forum.vbulletin.Profile.{FullProfile, Profile}
+import org.apache.commons.io.FileUtils
 import org.rogach.scallop.ScallopConf
 import org.rogach.scallop.exceptions.ScallopException
+import org.slf4j.LoggerFactory
 
 import scala.concurrent.{Future, Promise}
 
@@ -16,6 +18,8 @@ import scala.concurrent.{Future, Promise}
   * Date: 10/30/16
   */
 object Aggregate {
+
+  private val LOG = LoggerFactory.getLogger(getClass)
 
   def main(args: Array[String]): Unit = {
 
@@ -79,11 +83,15 @@ object Aggregate {
         implicit builder ⇒
           import GraphDSL.Implicits._
 
+          LOG.info("Start processing profile {} with expected likes {}", profile.username, likesExpected)
+
           val in = builder.add(Source(stream))
 
           val fan = builder.add(Broadcast[Profile.Profile](2))
 
-          val profileLikesSink = builder.add(FileIO.toPath(new File(base, s"likes_${profile.id}").toPath))
+          val likesFile: File = new File(base, s"likes_${profile.id}")
+
+          val profileLikesSink = builder.add(FileIO.toPath(likesFile.toPath))
 
           val profileComplete = Promise[Int]
 
@@ -92,6 +100,7 @@ object Aggregate {
           fan.out(0) ~> Flow.fromFunction[Profile.Profile, ByteString](
             p ⇒ ByteString(s"${p.id}\t${p.username}\t${p.liked.map(Likes.DateTimeParser.print).getOrElse("")}\n")
           ) ~> profileLikesSink
+
           fan.out(1) ~> Flow.apply[Profile.Profile].fold(0) { case (x, _) ⇒ x + 1 }
             .map(finalV ⇒ profileComplete.success(finalV)) ~> Sink.ignore
 
@@ -102,7 +111,13 @@ object Aggregate {
                 profileComplete
                   .future
                   .map {
-                    count ⇒ profile.copy(expectedLikes = likesExpected, actualLikes = count)
+                    count ⇒
+                      LOG.info("Finished profile {} with likes {}", profile.username, count)
+                      if (likesFile.length() == 0L) {
+                        LOG.warn("No links found, cleaning file {}", likesFile)
+                        FileUtils.deleteQuietly(likesFile)
+                      }
+                      profile.copy(expectedLikes = likesExpected, actualLikes = count)
                   }
               )
           )

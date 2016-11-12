@@ -9,10 +9,6 @@
     </layout>
   </appender>
 
-  <logger name="dm.forum.vbulletin">
-    <level value="debug"/>
-  </logger>
-
   <root>
     <priority value="info"/>
     <appender-ref ref="consoleAppender"/>

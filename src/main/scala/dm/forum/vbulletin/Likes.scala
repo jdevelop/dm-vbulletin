@@ -115,9 +115,6 @@ object Likes {
       }.collect {
         case (page, Right(contentNext)) ⇒
           val links = extractUserLikes(Jsoup.parse(contentNext))
-          if (links.size != 15) {
-            println(links)
-          }
           LOG.debug(s"Extracted {} links for {} at ${page}", links.length, userId)
           links
       }).flatMap(x ⇒ x.map(y ⇒ Profile(y._1, y._2)))

@@ -8,16 +8,18 @@ import org.apache.http.client.methods.{CloseableHttpResponse, HttpGet}
 import org.apache.http.config.{RegistryBuilder, SocketConfig}
 import org.apache.http.conn.socket.{ConnectionSocketFactory, PlainConnectionSocketFactory}
 import org.apache.http.conn.ssl.{SSLConnectionSocketFactory, SSLContexts, TrustStrategy}
-import org.apache.http.cookie.CookieSpec
 import org.apache.http.impl.client.HttpClients
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager
 import org.apache.http.util.EntityUtils
+import org.slf4j.LoggerFactory
 
 /**
   * User: Eugene Dzhurinsky
   * Date: 10/29/16
   */
 object HTTP {
+
+  private val LOG = LoggerFactory.getLogger(getClass)
 
   case class HttpContext(userid: String, password: String, urlPrefix: String)
 
@@ -57,19 +59,31 @@ object HTTP {
     .build()
 
   def receiveString(url: String)(implicit ctx: HttpContext): Either[Exception, String] = {
-    var response: CloseableHttpResponse = null
-    try {
-      val get = new HttpGet(url)
-      get.addHeader("Cookie", s"bb_userid=${ctx.userid};bb_password=${ctx.password}")
-      response = client.execute(get)
-      val content: String = EntityUtils.toString(response.getEntity)
-      Right(content)
-    } catch {
-      case e: Exception ⇒
-        Left(e)
-    } finally {
-      IOUtils.closeQuietly(response)
+    def inner(tries: Int = 3): Either[Exception, String] = {
+      var response: CloseableHttpResponse = null
+      try {
+        val get = new HttpGet(url)
+        get.addHeader("Cookie", s"bb_userid=${ctx.userid};bb_password=${ctx.password}")
+        response = client.execute(get)
+        val content: String = EntityUtils.toString(response.getEntity)
+        Right(content)
+      } catch {
+        case e: Exception ⇒
+          if (tries > 0) {
+            LOG.warn("Caught error while processing {}", url)
+            Thread.sleep(1000)
+            inner(tries - 1)
+          } else {
+            LOG.error("Retry aborted, url {} is invalid", url)
+            Left(e)
+          }
+      } finally {
+        IOUtils.closeQuietly(response)
+      }
     }
+
+    inner()
+
   }
 
 
