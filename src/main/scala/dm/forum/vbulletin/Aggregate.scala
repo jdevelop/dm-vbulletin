@@ -67,7 +67,6 @@ object Aggregate {
 
     val fetchProfileFlow: Flow[Int, OptProfile, NotUsed] = Flow.fromFunction(Profile.extractFullProfile)
 
-    val fetchLikesPagesFlow = Flow.fromFunction(Likes.estimateUserLikesPages)
 
     import argonaut._, Argonaut._
 
@@ -77,11 +76,13 @@ object Aggregate {
 
     import system.dispatcher
 
-    val fetchLikesAndUpdateProfileG = Flow[(OptProfile, (Int, Int))].flatMapConcat {
-      case (None, _) ⇒ Source.empty
-      case (Some(profile), (pages, likesExpected)) ⇒ GraphDSL.create() {
+    val fetchLikesAndUpdateProfileG = Flow[OptProfile].flatMapConcat {
+      case (None) ⇒ Source.empty
+      case Some(profile) ⇒ GraphDSL.create() {
         implicit builder ⇒
           import GraphDSL.Implicits._
+
+          val (pages, likesExpected) = Likes.estimateUserLikesPages(profile.id)
 
           LOG.info(s"Start processing profile ${profile.username} with expected likes/pages: ${likesExpected} / ${pages}")
 
@@ -127,27 +128,12 @@ object Aggregate {
       }
     }
 
-    RunnableGraph.fromGraph(
-      GraphDSL.create() {
-        implicit builder ⇒
+    val flowFuture = src.mapAsync(10)(pid ⇒ Future(Profile.extractFullProfile(pid)))
+      .via(fetchLikesAndUpdateProfileG)
+      .via(Flow.fromFunction[Profile.FullProfile, ByteString](p ⇒ ByteString(s"${p.asJson.nospaces}\n")))
+      .to(profileDataSink)
 
-          import GraphDSL.Implicits._
-
-          val inlet = builder.add(Broadcast[Int](2))
-          val merge = builder.add(Zip[OptProfile, (Int, Int)])
-
-          src.async ~> inlet.in
-
-          inlet.out(0) ~> fetchProfileFlow ~> merge.in0
-          inlet.out(1) ~> fetchLikesPagesFlow ~> merge.in1
-
-          merge.out ~> fetchLikesAndUpdateProfileG.async ~>
-            Flow.fromFunction[Profile.FullProfile, ByteString](p ⇒ ByteString(s"${p.asJson.nospaces}\n")).async ~>
-            profileDataSink
-
-          ClosedShape
-      }
-    ).run()
+    flowFuture.run()
 
   }
 
