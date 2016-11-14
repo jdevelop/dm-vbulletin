@@ -63,6 +63,7 @@ object HTTP {
       var response: CloseableHttpResponse = null
       try {
         val get = new HttpGet(url)
+        get.addHeader("Accept-Encoding", "gzip")
         get.addHeader("Cookie", s"bb_userid=${ctx.userid};bb_password=${ctx.password}")
         response = client.execute(get)
         val content: String = EntityUtils.toString(response.getEntity)

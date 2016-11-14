@@ -96,35 +96,34 @@ object Likes {
 
   // Public API
 
-  def extractUserList(userId: Int)(implicit ctx: HttpContext): (Int, Stream[Profile]) = {
+  def estimateUserLikesPages(userId: Int)(implicit ctx: HttpContext): (Int, Int) = {
     (for (
       content <- HTTP.receiveString(profileUrl(userId, 1, "likes_received")).right
     ) yield {
-      val doc = Jsoup.parse(content)
-      val pages = extractTotalPages(doc)
-      val likes = extractTotalLikes(doc)
-      if (LOG.isDebugEnabled()) {
-        LOG.debug(s"Found ${likes} likes on ${pages} pages for user id ${userId}")
-      }
-      likes -> (extractUserLikes(doc) #:: Stream.from(2).takeWhile(_ <= pages).map {
-        page ⇒
-          val url: String = profileUrl(userId, page, "likes_received")
-          val resp = HTTP.receiveString(url)
-          LOG.debug(s"Retrieved page response for {} of {} for ${userId}", page, pages)
-          page -> resp
-      }.collect {
-        case (page, Right(contentNext)) ⇒
-          val links = extractUserLikes(Jsoup.parse(contentNext))
-          LOG.debug(s"Extracted {} links for {} at ${page}", links.length, userId)
-          links
-      }).flatMap(x ⇒ x.map(y ⇒ Profile(y._1, y._2)))
+      val doc: Document = Jsoup.parse(content)
+      extractTotalPages(doc) -> extractTotalLikes(doc)
+    }) match {
+      case Left(exc) ⇒ LOG.error("Can't extract likes", exc)
+        (0, 0)
+      case Right(pages) ⇒
+        pages
+    }
+  }
+
+  def getLikesAtPage(userId: Int)(page: Int)(implicit ctx: HttpContext): List[Profile] = {
+    (for (
+      content <- HTTP.receiveString(profileUrl(userId, page, "likes_received")).right
+    ) yield {
+      LOG.debug("Requesting likes {} : {}", userId, page)
+      extractUserLikes(Jsoup.parse(content)).map(x ⇒ Profile(x._1, x._2))
     }) match {
       case Left(exc) ⇒
         LOG.error("Can't process the page", exc)
-        0 -> Stream.empty[Profile]
+        List.empty
       case Right(x) ⇒
-        x
+        x.toList
     }
+
   }
 
 }

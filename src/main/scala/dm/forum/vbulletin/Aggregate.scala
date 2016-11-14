@@ -67,7 +67,7 @@ object Aggregate {
 
     val fetchProfileFlow: Flow[Int, OptProfile, NotUsed] = Flow.fromFunction(Profile.extractFullProfile)
 
-    val fetchLikesFlow: Flow[Int, LikesAndCount, NotUsed] = Flow.fromFunction(Likes.extractUserList)
+    val fetchLikesPagesFlow = Flow.fromFunction(Likes.estimateUserLikesPages)
 
     import argonaut._, Argonaut._
 
@@ -77,15 +77,17 @@ object Aggregate {
 
     import system.dispatcher
 
-    val fetchLikesAndUpdateProfileG = Flow[(OptProfile, LikesAndCount)].flatMapConcat {
+    val fetchLikesAndUpdateProfileG = Flow[(OptProfile, (Int, Int))].flatMapConcat {
       case (None, _) ⇒ Source.empty
-      case (Some(profile), (likesExpected, stream)) ⇒ GraphDSL.create() {
+      case (Some(profile), (pages, likesExpected)) ⇒ GraphDSL.create() {
         implicit builder ⇒
           import GraphDSL.Implicits._
 
-          LOG.info("Start processing profile {} with expected likes {}", profile.username, likesExpected)
+          LOG.info(s"Start processing profile ${profile.username} with expected likes/pages: ${likesExpected} / ${pages}")
 
-          val in = builder.add(Source(stream))
+          val in = builder.add(Source(1 to pages).mapAsyncUnordered(10) {
+            page ⇒ Future(Likes.getLikesAtPage(profile.id)(page))
+          }.mapConcat(identity))
 
           val fan = builder.add(Broadcast[Profile.Profile](2))
 
@@ -132,11 +134,12 @@ object Aggregate {
           import GraphDSL.Implicits._
 
           val inlet = builder.add(Broadcast[Int](2))
-          val merge = builder.add(Zip[OptProfile, LikesAndCount])
+          val merge = builder.add(Zip[OptProfile, (Int, Int)])
 
           src.async ~> inlet.in
-          inlet.out(0) ~> fetchProfileFlow.async ~> merge.in0
-          inlet.out(1) ~> fetchLikesFlow.async ~> merge.in1
+
+          inlet.out(0) ~> fetchProfileFlow ~> merge.in0
+          inlet.out(1) ~> fetchLikesPagesFlow ~> merge.in1
 
           merge.out ~> fetchLikesAndUpdateProfileG.async ~>
             Flow.fromFunction[Profile.FullProfile, ByteString](p ⇒ ByteString(s"${p.asJson.nospaces}\n")).async ~>
